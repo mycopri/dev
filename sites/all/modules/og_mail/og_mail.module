@@ -1,0 +1,435 @@
+<?php
+/**
+ * @file
+ * Subscriptions to content events
+ */
+
+/**
+ * Implementation of hook_permission()
+ */
+function og_mail_permission() {
+  return array(
+    'subscribe to content' =>  array(
+      'title' => t('Subscribe to content'),
+      'description' => t('Subscribe to content posted or updated.'),
+    ),
+    'subscribe to content type' =>  array(
+      'title' => t('Subscribe to content type'),
+      'description' => t('Subscribe to all content from a content type.'),
+    ),
+    'og_mail admin' =>  array(
+      'title' => t('Admin/developer'),
+      'description' => t('For use for testing and development only.'),
+    ),
+  );
+}
+
+/**
+ * Implement hook_menu().
+ *
+ * Set up a page with an e-mail contact form on it.
+ */
+function og_mail_menu() {
+  $items['admin/config/group/notifications'] = array(
+    'title' => 'Organic groups notifications',
+    'description' => 'Administer Organic group notifications email templates.',
+    'position' => 'right',
+    'weight' => -5,
+    'page callback' => 'system_admin_menu_block_page',
+    'access arguments' => array('administer group'),
+    'file' => 'system.admin.inc',
+    'file path' => drupal_get_path('module', 'system'),
+  );
+  $items['admin/config/group/notifications/new-content'] = array(
+    'title' => 'New content',
+    'description' => 'Administer template for new content posted in group.',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('og_mail_form'),
+    'access arguments' => array('administer group'),
+    'file' => 'og_mail.admin.inc',
+    'file path' => drupal_get_path('module', 'og_mail'),
+  );  
+  $items['admin/config/group/notifications/testing'] = array(
+    'title' => 'Development/Testing',
+    'description' => 'Testing and development of the module.',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('og_mail_devel_form'),
+    'access arguments' => array('og_mail admin'),
+    'file' => 'og_mail.admin.inc',
+    'file path' => drupal_get_path('module', 'og_mail'),
+    'weight' => 10,
+  );  
+  return $items;
+}
+
+/**
+ * Implementation of hook_node_update().
+ */
+function og_mail_node_update($node) {
+  og_mail_event($node, 'node', 'update');
+}
+
+/**
+ * Implementation of hook_node_insert().
+ */
+function og_mail_node_insert($node) {
+  og_mail_event($node, 'node', 'create');
+}
+
+/**
+ * Implementation of hook_comment_insert().
+ */
+function og_mail_comment_insert($comment) {
+  og_mail_event($comment, 'comment', 'create');
+}
+
+/**
+ * Perform database operations when a node that belongs to a group is created
+ * or updated. This is the entry point for queuing events for each user. This
+ * function is called from the implementation of hooke_insert and hook update as 
+ * og_mail_insert and og_mail_update.
+ * 
+ * @param type $object
+ *    This is an object that triggered the event right now it is either a node
+ *    or a comment.
+ * @param type $type
+ *    The type of object being passed in i.e. 'node' or 'comment'
+ * @param type $event
+ *    The type of event that ocurred i.e. 'create', 'update', 'comment'
+ * @return type
+ */
+function og_mail_event($object, $type, $event) {
+  module_load_include('inc', 'og_mail');
+  $key = 'digest';
+  // Only want to send notifications for group content
+  switch ($type) {
+    case 'node':
+      $node = $object;
+      if (!_node_in_group($node)) {
+        return;
+      }
+      if ($node->status) {
+        $event_id = _og_mail_save_event($node, $type, $event);
+        _og_mail_queue($node, $event_id);
+      }
+      break;
+    case 'comment':
+      $comment = $object;
+      $node = node_load($object->nid);
+      if (!_node_in_group($node)) {
+        return;
+      }
+      $event_id = _og_mail_save_event($comment, $type, $event);
+      _og_mail_queue($comment, $event_id);
+      break;
+  }  
+}
+
+function og_mail_theme($existing, $type, $theme, $path) {
+  return array(
+      'og_mail' => array(
+          'variables' => array('params' => array()),
+          'template' => 'og_mail',
+          'path' => drupal_get_path('module', 'og_mail') . '/themes',
+      ),
+      'og_mail_form_intro' => array(
+          'template' => 'og_mail_form_intro',
+          'path' => drupal_get_path('module', 'og_mail') . '/themes',
+      ),
+      'og_mail_greeting' => array(
+          'variables' => array('account' => NULL),
+          'template' => 'og_mail_greeting',
+          'file' => 'og_mail.theme.inc',
+          'path' => drupal_get_path('module', 'og_mail') . '/themes',          
+      ),
+      'og_mail_closing' => array(
+          'template' => 'og_mail_closing',
+          'file' => 'og_mail.theme.inc',
+          'path' => drupal_get_path('module', 'og_mail') . '/themes',          
+      ),
+      'og_mail_new_post' => array(
+          'variables' => array('node' => NULL),
+          'template' => 'og_mail_new_post',
+          'file' => 'og_mail.theme.inc',
+          'path' => drupal_get_path('module', 'og_mail') . '/themes',
+      ),
+      'og_mail_updated_post' => array(
+          'variables' => array('node' => NULL),
+          'template' => 'og_mail_updated_post',
+          'file' => 'og_mail.theme.inc',
+          'path' => drupal_get_path('module', 'og_mail') . '/themes',
+      ),
+      'og_mail_comment' => array(
+          'variables' => array('comment' => NULL),
+          'template' => 'og_mail_comment',
+          'file' => 'og_mail.theme.inc',
+          'path' => drupal_get_path('module', 'og_mail') . '/themes',
+      ),
+      'og_mail_digest' => array(
+          'variables' => array('list' => NULL, 'type' => NULL),
+          'file' => 'og_mail.theme.inc',
+          'path' => drupal_get_path('module', 'og_mail') . '/themes',          
+      ),
+  );
+}
+
+function og_mail_preprocess_og_mail(&$variables) {
+  $new = $variables['new'];
+  $updated = $variables['updated'];
+  $comments = $variables['comments'];
+  
+  $notices = array();
+  if(count($new) > 1) {
+    foreach($new as $post) {
+      $notices[] = "{$post['@title']} was posted {$post['@time']} ago by {$post['@author']}.";
+    }
+    $variables['new_posts'] = theme('item_list', 
+            array(
+                'items'=>$notices, 
+                'type'=>'ul', 
+                'title'=>'You might want to check out the following new posts:',)
+    );
+  }
+  elseif (count($new) == 1) {
+    $post = $new[0];
+    $variables['new_posts'] = "{$post['@author']} posted {$post['@title']} {$post['@time']}";
+  }
+  
+  $notices = array();  
+  if(count($updated) > 1) {
+    foreach($updated as $post) {
+      $notices[] = "{$post['@author']} updated {$post['@title']} {$post['@time']} ago.";
+    }
+    $variables['updated_posts'] = theme('item_list', 
+            array(
+                'items'=>$notices, 
+                'type'=>'ul', 
+                'title'=>'The following posts have been updated:',)
+    );  
+  }
+  elseif (count($updated) == 1) {
+    $post = $updated[0];
+    $variables['updated_posts'] = "{$post['@author']} updated {$post['@title']} {$post['@time']} ago.";
+  }
+  
+  $notices = array();
+  if(count($comments) > 1) {
+    foreach($comments as $comment) {
+      $notices[] = "{$comment['@author']} commented on {$comment['@node_title']} {$comment['@time']} ago.";
+    }
+    $variables['comments'] = theme('item_list', 
+            array(
+                'items'=>$notices, 
+                'type'=>'ul', 
+                'title'=>'The following comments have been made:',)
+    );
+  }
+  elseif (count($comments) == 1) {
+    $comment = $comments[0];
+    $variables['new_comments'] = "{{$comment['@author']} commented on {$comment['@node_title']} {$comment['@time']} ago.";
+  }
+}
+
+/**
+ * Sends an email
+ * 
+ * @param type $key
+ *    An identifier of the mail.
+ * @param type $message
+ *    An array that may include the following elements:
+ *      id
+ *      to
+ *      subject
+ *      body
+ *      from
+ *      headers
+ * @param type $params
+ *      An array of parametersto supply
+ */
+function og_mail_send($key = NULL, $send = TRUE) {
+  $module = 'og_mail';
+
+  // Get the queue of notifications
+  $query = db_select('og_mail', 'mail')
+          ->fields('mail', array('uid'))
+          ->distinct()
+          ->execute();
+  $uids = $query->fetchAll();
+  
+  // Assemble a list of users who have notifications
+  if($uids) {
+    foreach($uids as $uid) {
+      $account = user_load($uid->uid);
+      $query = db_select('og_mail_user', 'og')
+              ->fields('og', array('uid', 'timestamp'))
+              ->condition('uid', $account->uid)
+              ->execute();
+      $row = $query->fetchAssoc();
+      $recipients[$account->uid] = $account;
+    }
+
+    // Loop through each of the users and send the notifictions
+    $from = variable_get('og_from_mail', variable_get('site_mail'));
+    $language = user_preferred_language($account);
+    foreach($recipients as $uid => $account) {
+      $params['account'] = $account;
+      $params['digest'] = og_mail_digest($account);
+      if ($params['digest']) {
+        $result = drupal_mail('og_mail', $key, $account->mail, $language, $params, $send);
+      }
+    }
+  }
+}
+
+/**
+ * Implement hook_mail().
+ */
+function og_mail_mail($key, &$message, $params) {
+  $account = $params['account'];
+  
+  $options = array(
+    'langcode' => $message['language']->language,
+  );
+  $message['subject'] = t('E-mail sent from @site-name', array('@site-name' => variable_get('site_name', 'Drupal')), $options);
+  switch ($key) {
+    // Send a simple message from the contact form.
+    case 'digest':
+      $digest = $params['digest'];
+      $message['body']['greeting'] = theme('og_mail_greeting', array('account' => $account));
+      foreach($digest as $type => $list) {
+        if (count($list) >= 1) {
+          $digest_parts[$type] = theme('og_mail_digest', array('list' => $list, 'type' => $type));
+        }
+      }
+      if(isset($digest_parts['new_posts'])) {
+        $message['body']['new_posts'] = $digest_parts['new_posts'];
+      }
+      if(isset($digest_parts['updated_posts'])) {
+        $message['body']['updated_posts'] = $digest_parts['updated_posts'];
+      }
+      if(isset($digest_parts['comments'])) {
+        $message['body']['comments'] = $digest_parts['comments'];
+      }
+      if(isset($digest_parts['og_mail_closing'])) {
+        $message['body']['closing'] = theme('og_mail_closing');
+      }
+      return;
+  }
+}
+
+/**
+ * Creates a digest of events since the last notification for a specific
+ * user. The user is passed in through the arguments and this function is
+ * called from og_mail_mail()
+ * 
+ * @param type $account
+ * @return type
+ *  an array with the following elements:
+ *    'new_posts'
+ *    'updated_posts'
+ *    'comments'
+ */
+function og_mail_digest($account) {
+  $digest = array();
+  $queue = _og_mail_get_user_queue($account);
+  
+  if($queue) {
+    foreach($queue as $key => $event) {
+      $time_interval = '';
+      // Depending on what the event is from - comment or node
+      // assign $object to the appropriate object.
+      if($event->type == 'comment') {
+        $object = comment_load($event->cid);
+      }
+      elseif($event->type == 'node') {
+        $object = node_load($event->nid);
+      }
+      // Determine how long ago the event ocurred
+      $time_delta = time() - $object->changed;
+      
+      if ($time_delta < 1) {
+        $time_interval = "just now";
+      }
+      else {
+        $time_interval = format_interval(time() - $object->changed, 2);
+      }
+      
+      // Get the author of the object
+      // To do: There may be cases where a node or comment can be altered by
+      // someone other than the author themselves. Not sure how drupal core
+      // tracks this? Is it in node_revision?
+      $author = user_load($object->uid);
+      if ($event->event == 'create') {
+        if ($event->type == 'node') {
+          $digest['new_posts'][] = theme('og_mail_new_post', array('node' => $object));
+        }
+        elseif ($event->type == 'comment') {
+          $digest['comments'][] = theme('og_mail_comment', array('comment' => $object));
+        }
+      }
+      elseif ($event->event == 'update') {
+        $digest['updated_posts'][] = theme('og_mail_updated_post', array('node' => $object));
+      }
+      og_mail_process_mail($event, $account);
+    }
+    return $digest;
+  }
+  return FALSE;
+}
+
+function og_mail_cron() {
+  module_load_include('inc', 'og_mail');
+  og_mail_send('digest', TRUE);
+  //og_mail_clean_db();
+}
+
+/**
+ * Updates the database to mark the mail as sent
+ * 
+ * @param type $event
+ * @param type $account
+ */
+function og_mail_process_mail($event, $account) {
+  db_update('og_mail')
+    ->fields(array(
+        'sent' => 1,
+    ))
+    -> condition('id', $event->id)
+    -> execute();
+}
+
+function og_mail_process_event($event) {
+  db_delete('og_mail_events')
+    -> condition('id', $event->event_id)
+    -> execute();
+}
+
+function og_mail_clean_db() {
+  db_delete('og_mail')
+    -> condition('sent', 1)
+    -> execute();
+  
+  // Now we want to go ahead and clean the og_mail_events table
+  $events = db_select('og_mail_events')
+    -> fields('og_mail_events', array('id', 'created'))
+    -> execute() -> fetchAllAssoc('id');
+  foreach($events as $event_id => $event) {
+    $time = time() - $event->created;
+    if ($time >= (24*60*60)) {
+      $mails = db_select('og_mail')
+        -> fields('og_mail', array('id'))
+        -> condition('event_id', $event_id)
+        -> execute() -> fetchAllAssoc();
+      if (!$mails) {
+        db_delete('og_mail_events')
+          -> condition('id', $event_id)
+          -> execute();
+      }
+    }
+  }
+}
+
+function og_mail_preprocess_mimemail_message(&$variables) {
+  $file = drupal_get_path('module', 'system') . '/system.theme.css';
+  $css_all = drupal_add_css($file, array('group' => CSS_SYSTEM));
+}
